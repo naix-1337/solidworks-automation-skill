@@ -65,3 +65,16 @@ python tests/solidworks_golden_workflow.py \
 | `CADSTUDIO_SOLVER_DIRS` | 显式指定 CalculiX 求解器根目录（`os.pathsep` 分隔） |
 
 这两个变量只影响**发现顺序**，不改变任何几何、公差或验收判据。
+
+## 受信尺寸证明配置
+
+- `measurement_trust_root.example.json`：生产 Ed25519 公钥与只追加轮换日志的示例；
+  实际文件必须部署到 `C:\Program Files\CAD Studio\evidence\measurement_trust_root.json`，
+  不能放在 Agent 可写工作区。
+- `measurement_trust_root.schema.json`：信任根结构约束。
+- `measurement_control_plane.openapi.yaml`：私有一次性验证会话、上传、证明与在线状态接口。
+
+Worker 只从进程环境读取 `CAD_EVIDENCE_CONTROL_URL` 和
+`CAD_EVIDENCE_CONTROL_TOKEN`，并在启动 Agent 前移除所有 `CAD_EVIDENCE_*` 变量。
+完整威胁模型见
+[`docs/architecture/measurement-evidence-trust-chain.md`](../docs/architecture/measurement-evidence-trust-chain.md)。

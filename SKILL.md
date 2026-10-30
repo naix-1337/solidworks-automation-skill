@@ -123,6 +123,7 @@ with SolidWorksSession(version=2026) as session:
 | 装配 BOM CSV 与 Pack and Go | `scripts/sw_delivery.py` | `references/export.md` |
 | OBJ/STL 高还原网格参考导入 | `scripts/sw_import_mesh_reference.py` | `references/mesh-reference-import.md` |
 | 结果自审查 | `scripts/sw_review.py` | `references/review.md` |
+| STEP/IGES/BREP 受信尺寸证明 | `scripts/cad_evidence_verifier.py` | `docs/architecture/measurement-evidence-trust-chain.md` |
 | 语义实体引用 | `scripts/sw_entity_reference.py` | 逐步替代 Face1/Edge1 和屏幕坐标 |
 | DFM 制造风险复核 | `scripts/dfm_review.py`、`scripts/dfm_profiles.py`、`scripts/cad_studio.py check-dfm` | 供应商 profile、B-Rep 证据、机加工、钣金、激光切割、3D 打印和注塑声明型规则检查 |
 | Routing 中性复核与前置 | `scripts/routing_review.py`、`scripts/cad_studio.py check-routing`、`scripts/cad_studio.py routing-preflight` | 端点、分段、长度、弯曲半径、碰撞/间隙、支撑、Routing BOM；原生写入必须等加载项/许可证证据 |
@@ -288,6 +289,7 @@ assert result.ok, result.issues
 3. 用 `scripts/sw_review.py` 的 `run_review()` 导出 `isometric/front/top/right` 预览图并写入 `*_review_report.json`。
 4. 读取报告里的 `evaluation.status`、`evaluation.issues`、`checks` 和预览图；通过截图或导出的 BMP 检查：主体是否存在、比例/方位是否合理、关键部件是否缺失、是否明显重叠或悬空、文件名和输出路径是否正确。
 5. 若发现问题，先修脚本并重新生成，再汇报；不要只报告“保存成功”。
+6. 明确尺寸和孔径任务不得把 Agent 自写 `cad_spec`、`measurement_source` 或 `verification.status` 当作 `PASS` 依据。生产尺寸证据必须来自受保护 Runner 重开 STEP/IGES/BREP 后签发的 `cad-measurement-attestation/v1`，并通过在线签名状态、验证器版本策略和当前产物哈希校验。
 
 示例：
 

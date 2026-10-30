@@ -124,10 +124,15 @@ def check_json_files():
         ROOT / "apps/desktop/cad_workbench/schemas/neutral_cad_document.schema.json",
         ROOT / "apps/desktop/cad_workbench/schemas/preview_manifest.schema.json",
         ROOT / "apps/desktop/cad_workbench/schemas/evidence_graph.schema.json",
+        ROOT / "apps/desktop/cad_workbench/schemas/dimension_verification.schema.json",
+        ROOT / "apps/desktop/cad_workbench/schemas/measurement_attestation.schema.json",
+        ROOT / "apps/desktop/cad_workbench/schemas/measurement_attestation_status.schema.json",
         ROOT / "apps/desktop/cad_workbench/schemas/fea_analysis.schema.json",
         ROOT / "apps/desktop/cad_workbench/schemas/advanced_geometry.schema.json",
         ROOT / "subskills/solidworks-vibecad/schemas/design_plan.schema.json",
         ROOT / "subskills/solidworks-engineering-drawing/schemas/drawing_spec.schema.json",
+        ROOT / "config/measurement_trust_root.schema.json",
+        ROOT / "config/measurement_trust_root.example.json",
     ]
     for path in targets:
         json.loads(path.read_text(encoding="utf-8"))

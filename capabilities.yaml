@@ -468,6 +468,20 @@
       "allowed_modes": ["interactive", "reviewed"]
     },
     {
+      "id": "measurement_evidence_trust_chain",
+      "label": "STEP/IGES/BREP 受信尺寸证明",
+      "level": "pilot",
+      "backends": ["headless_occt", "private-cad-evidence-runner"],
+      "verified_versions": [],
+      "dependencies": ["OCP", "cryptography", "私有 CAD-EVIDENCE Runner", "cad-validation Environment", "在线证明控制面"],
+      "limitations": [
+        "首版只证明开放 B-Rep 的包围盒和孔径；SLDPRT/SLDASM/SLDDRW 仍需独立原生复核",
+        "生产 PASS 必须同时满足在线签名状态、验证器版本策略和当前产物哈希，离线不能通过",
+        "仓库已完成协议、验证器、门禁和工作流代码；真实 Environment、Runner、控制面和签名密钥仍需部署验收"
+      ],
+      "allowed_modes": ["interactive", "reviewed"]
+    },
+    {
       "id": "routing",
       "label": "Routing",
       "level": "pilot",

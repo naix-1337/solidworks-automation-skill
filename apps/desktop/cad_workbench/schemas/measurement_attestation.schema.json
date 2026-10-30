@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-studio.local/schemas/measurement_attestation.schema.json",
+  "title": "CAD Measurement Attestation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "attestationId",
+    "sessionId",
+    "jobId",
+    "runId",
+    "nonce",
+    "specSha256",
+    "verifier",
+    "artifacts",
+    "checks",
+    "decision",
+    "issuedAt",
+    "expiresAt",
+    "signer",
+    "signature"
+  ],
+  "properties": {
+    "schema": {
+      "const": "cad-measurement-attestation/v1"
+    },
+    "attestationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "jobId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 256
+    },
+    "specSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflowRepository",
+        "workflowRef",
+        "workflowSha",
+        "toolkitSha256",
+        "runtime",
+        "runnerId",
+        "processId",
+        "processCreatedAt",
+        "argv",
+        "argvSha256",
+        "exitCode"
+      ],
+      "properties": {
+        "workflowRepository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowSha": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        "toolkitSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pythonVersion",
+            "platform",
+            "dependencyLockSha256",
+            "dependencyVersionsSha256"
+          ],
+          "properties": {
+            "pythonVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "platform": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dependencyLockSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "dependencyVersionsSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "runnerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "processId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "processCreatedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "argvSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exitCode": {
+          "const": 0
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "artifactId",
+          "kind",
+          "bundlePath",
+          "sha256",
+          "sizeBytes",
+          "geometryFingerprintSha256",
+          "validSolids",
+          "envelopeUm",
+          "holes"
+        ],
+        "properties": {
+          "artifactId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "kind": {
+            "enum": ["step", "stp", "iges", "igs", "brep"]
+          },
+          "bundlePath": {
+            "type": "string",
+            "pattern": "^artifacts/[A-Za-z0-9._-]+$"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "geometryFingerprintSha256": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/sha256"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validSolids": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "envelopeUm": {
+            "oneOf": [
+              {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "holes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["diameterUm", "count"],
+              "properties": {
+                "diameterUm": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "message"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": ["pass", "fail", "blocked"]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "decision": {
+      "enum": ["pass", "fail", "blocked"]
+    },
+    "issuedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expiresAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "signer": {
+      "$ref": "#/$defs/signer"
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "keyId", "signedAt"],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^ed25519:[0-9a-f]{64}$"
+        },
+        "signedAt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

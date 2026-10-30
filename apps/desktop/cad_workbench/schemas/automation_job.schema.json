@@ -152,6 +152,31 @@
       "type": "object",
       "additionalProperties": true
     },
+    "verificationSpec": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "verificationSpecConfirmed": {
+      "type": "boolean"
+    },
+    "verificationSession": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "measurementAttestation": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "measurementAttestationPath": {
+      "type": ["string", "null"]
+    },
+    "measurementTrustPreflight": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "measurementTrustError": {
+      "type": ["string", "null"]
+    },
     "drawingEvidence": {
       "type": "object",
       "additionalProperties": true

@@ -200,6 +200,13 @@ export type AutomationJob = {
   fallbackPolicy?: "allow_open_formats" | "native_only" | "blocked";
   previewManifest?: string;
   evidenceGraph?: Record<string, unknown>;
+  verificationSpec?: Record<string, unknown> | null;
+  verificationSpecConfirmed?: boolean;
+  verificationSession?: Record<string, unknown> | null;
+  measurementAttestation?: Record<string, unknown> | null;
+  measurementAttestationPath?: string | null;
+  measurementTrustPreflight?: Record<string, unknown>;
+  measurementTrustError?: string | null;
   verificationEvidence?: Array<Record<string, unknown>>;
   drawingEvidence?: DomainEvidence;
   bomEvidence?: DomainEvidence;
@@ -234,6 +241,11 @@ export type AutomationJob = {
     outputs?: Record<string, string> | Array<string | ArtifactRecord>;
     artifacts?: Array<string | ArtifactRecord>;
     verification?: Array<Record<string, unknown>>;
+    measurementAttestation?: Record<string, unknown>;
+    measurementAttestationPath?: string;
+    measurementBundlePath?: string;
+    measurementBundleSha256?: string;
+    measurementTrustError?: string;
     features?: Array<Record<string, unknown>>;
     checks?: ReviewCheck[];
     stdoutTail?: string;

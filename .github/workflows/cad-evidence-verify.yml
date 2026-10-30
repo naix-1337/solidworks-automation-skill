@@ -1,0 +1,89 @@
+name: CAD Evidence Verify
+
+on:
+  repository_dispatch:
+    types: [cad-evidence-verify]
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: "Control-plane verification session ID"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cad-evidence-${{ github.event.client_payload.session_id || inputs.session_id }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: independent-brep-verification
+    environment: cad-validation
+    runs-on: [self-hosted, Windows, CAD-EVIDENCE]
+    timeout-minutes: 20
+    env:
+      CAD_EVIDENCE_CONTROL_URL: ${{ vars.CAD_EVIDENCE_CONTROL_URL }}
+      CAD_EVIDENCE_CONTROL_TOKEN: ${{ secrets.CAD_EVIDENCE_CONTROL_TOKEN }}
+      CAD_EVIDENCE_PRIVATE_KEY_PEM: ${{ secrets.CAD_EVIDENCE_PRIVATE_KEY_PEM }}
+      CAD_EVIDENCE_SESSION_ID: ${{ github.event.client_payload.session_id || inputs.session_id }}
+    steps:
+      - name: Validate protected invocation
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REPOSITORY -ne "wzyn20051216/solidworks-automation-skill") {
+            throw "Unexpected repository: $env:GITHUB_REPOSITORY"
+          }
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+            throw "Evidence verification only runs from main."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:CAD_EVIDENCE_SESSION_ID)) {
+            throw "Session ID is required."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:CAD_EVIDENCE_CONTROL_URL) -or
+              [string]::IsNullOrWhiteSpace($env:CAD_EVIDENCE_CONTROL_TOKEN) -or
+              [string]::IsNullOrWhiteSpace($env:CAD_EVIDENCE_PRIVATE_KEY_PEM)) {
+            throw "Protected evidence verifier secrets are not configured."
+          }
+
+      # 只固定检出 main；证明包中的代码永远不会被执行。
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install verifier dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --only-binary=:all: -r requirements-evidence-verifier.txt
+
+      - name: OCCT real STEP self-test
+        shell: pwsh
+        run: |
+          python scripts/ci/measurement_occt_selftest.py
+          if ($LASTEXITCODE -ne 0) {
+            throw "OCCT verifier self-test failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify B-Rep and sign attestation
+        shell: pwsh
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP "cad-evidence-ed25519-private.pem"
+          try {
+            [System.IO.File]::WriteAllText(
+              $keyPath,
+              $env:CAD_EVIDENCE_PRIVATE_KEY_PEM,
+              (New-Object System.Text.UTF8Encoding($false))
+            )
+            python scripts/ci/run_measurement_session.py `
+              --session-id $env:CAD_EVIDENCE_SESSION_ID `
+              --private-key $keyPath
+            if ($LASTEXITCODE -ne 0) {
+              throw "Independent verification failed with exit code $LASTEXITCODE"
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $keyPath -Force -ErrorAction SilentlyContinue
+          }

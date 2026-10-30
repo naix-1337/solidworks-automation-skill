@@ -1,0 +1,31 @@
+{
+  "schema": "cad-measurement-trust-root/v1",
+  "keys": [
+    {
+      "keyId": "ed25519:REPLACE_WITH_PUBLIC_KEY_SHA256",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_ED25519_PUBLIC_KEY\n-----END PUBLIC KEY-----\n",
+      "purposes": ["measurement_attestation"],
+      "notBefore": "2026-10-30T00:00:00Z",
+      "revokedAt": null
+    },
+    {
+      "keyId": "ed25519:REPLACE_WITH_STATUS_PUBLIC_KEY_SHA256",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_STATUS_ED25519_PUBLIC_KEY\n-----END PUBLIC KEY-----\n",
+      "purposes": ["attestation_status"],
+      "notBefore": "2026-10-30T00:00:00Z",
+      "revokedAt": null
+    }
+  ],
+  "rotationLog": [
+    {
+      "keyId": "ed25519:REPLACE_WITH_PUBLIC_KEY_SHA256",
+      "addedAt": "2026-10-30T00:00:00Z",
+      "reason": "initial deployment: measurement attestation"
+    },
+    {
+      "keyId": "ed25519:REPLACE_WITH_STATUS_PUBLIC_KEY_SHA256",
+      "addedAt": "2026-10-30T00:00:00Z",
+      "reason": "initial deployment: online attestation status"
+    }
+  ]
+}

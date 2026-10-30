@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CAD Measurement Trust Root",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "keys", "rotationLog"],
+  "properties": {
+    "schema": {
+      "const": "cad-measurement-trust-root/v1"
+    },
+    "keys": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["keyId", "publicKeyPem", "purposes", "notBefore", "revokedAt"],
+        "properties": {
+          "keyId": {
+            "type": "string",
+            "pattern": "^ed25519:[0-9a-f]{64}$"
+          },
+          "publicKeyPem": {
+            "type": "string",
+            "minLength": 1
+          },
+          "purposes": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": ["measurement_attestation", "attestation_status"]
+            }
+          },
+          "notBefore": {
+            "type": ["string", "null"]
+          },
+          "revokedAt": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "rotationLog": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["keyId", "addedAt", "reason"],
+        "properties": {
+          "keyId": {
+            "type": "string",
+            "pattern": "^ed25519:[0-9a-f]{64}$"
+          },
+          "addedAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

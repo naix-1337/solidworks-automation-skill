@@ -22,6 +22,7 @@ from apps.desktop.cad_workbench.artifact_ledger import build_artifact_ledger
 from apps.desktop.cad_workbench.queue_worker import (
     JobCancelled,
     MOCK_HANDLERS,
+    _agent_child_environment,
     _run_command_with_runtime,
     acquire_lock,
     approve_job,
@@ -72,6 +73,50 @@ def test_process_queue_dispatches_agent_executor_to_agent_task_handler(tmp_path:
     assert called == ["agent-dispatch"]
     assert processed[0]["status"] == "review_required"
     assert processed[0]["result"]["mode"] == "agent"
+
+
+def test_dimension_job_blocks_before_agent_without_control_plane(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    job = _queued_job("dimension-without-proof", "agent_task")
+    job.update(
+        {
+            "executor": "agent",
+            "expectedOutput": "STEP",
+            "objective": "创建 60 x 40 x 12 mm 校准板，中心孔直径 10 mm。",
+            "policy": {"sandbox": "workspace-write", "approval": "never"},
+        }
+    )
+    write_job(queue_dir / "dimension-without-proof.json", job)
+    called: list[str] = []
+
+    def handler(active_job: dict) -> dict:
+        called.append(str(active_job["id"]))
+        return {"mode": "agent", "message": "不应执行", "outputs": []}
+
+    process_queue(queue_dir, handlers={"agent_task": handler})
+
+    saved = read_job(queue_dir / "dimension-without-proof.json")
+    assert saved["status"] == "blocked"
+    assert saved["measurementTrustPreflight"]["code"] == "control_plane_missing"
+    assert called == []
+
+
+def test_agent_child_environment_strips_all_evidence_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAD_EVIDENCE_CONTROL_TOKEN", "secret-token")
+    monkeypatch.setenv("CAD_EVIDENCE_CONTROL_URL", "https://verifier.invalid")
+    monkeypatch.setenv("CAD_EVIDENCE_PRIVATE_KEY_PEM", "private-key")
+    monkeypatch.setenv("UNRELATED_SETTING", "kept")
+
+    child = _agent_child_environment()
+
+    assert not any(name.startswith("CAD_EVIDENCE_") for name in child)
+    assert child["UNRELATED_SETTING"] == "kept"
 
 
 def _queued_job(job_id: str = "job-1", kind: str = "create_shell") -> dict:
@@ -301,7 +346,7 @@ def test_reviewer_gate_fails_missing_artifact(tmp_path: Path) -> None:
     saved = read_job(job_path)
     review = saved["reviewGate"]
     assert saved["status"] == "failed"
-    assert review["status"] == "fail"
+    assert review["status"] in {"fail", "blocked"}
     assert any(check["status"] == "fail" for check in review["checks"])
 
 
@@ -337,7 +382,7 @@ def test_reviewer_gate_rejects_codex_receipt_as_cad_delivery(tmp_path: Path) -> 
     assert {"expected-cad-deliverable-sldprt", "expected-cad-deliverable-step", "expected-cad-deliverable-stl"} <= failed_ids
 
 
-def test_reviewer_gate_rejects_failed_executor_verification(tmp_path: Path) -> None:
+def test_reviewer_gate_keeps_executor_verification_advisory(tmp_path: Path) -> None:
     queue_dir = tmp_path / "queue"
     job_path = queue_dir / "job-verification-failed.json"
     model_path = tmp_path / "model.step"
@@ -365,11 +410,18 @@ def test_reviewer_gate_rejects_failed_executor_verification(tmp_path: Path) -> N
 
     saved = read_job(job_path)
     assert saved["status"] == "failed"
-    assert any(check["id"] == "executor-verification-0" and check["status"] == "fail" for check in saved["reviewGate"]["checks"])
+    assert any(
+        check["id"] == "executor-verification-0"
+        and check["status"] == "pass"
+        and "仅展示" in check["message"]
+        for check in saved["reviewGate"]["checks"]
+    )
 
 
 def test_reviewer_gate_rejects_cad_spec_mismatch_from_validation_json(tmp_path: Path) -> None:
     validation = tmp_path / "validation.json"
+    step = tmp_path / "model.step"
+    step.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
     validation.write_text(
         json.dumps(
             {
@@ -385,10 +437,20 @@ def test_reviewer_gate_rejects_cad_spec_mismatch_from_validation_json(tmp_path: 
     ledger = {
         "executor": "codex",
         "objective": "创建 60 x 40 x 12 mm 校准板，中心孔直径 10 mm，四角孔直径 4 mm。",
+        "expectedOutput": "STEP",
         "strictRules": [],
         "resultMessage": "已创建 120 x 80 x 8 mm 校准板。",
         "verification": [{"command": "cad-check", "status": "passed", "note": "执行器自报通过"}],
         "artifacts": [
+            {
+                "kind": "step",
+                "path": str(step),
+                "exists": True,
+                "isDirectory": False,
+                "sizeBytes": step.stat().st_size,
+                "sha256": hashlib.sha256(step.read_bytes()).hexdigest(),
+                "producedThisRun": True,
+            },
             {
                 "kind": "json",
                 "path": str(validation),
@@ -403,13 +465,15 @@ def test_reviewer_gate_rejects_cad_spec_mismatch_from_validation_json(tmp_path: 
 
     review = evaluate_ledger(ledger)
 
-    assert review["status"] == "fail"
+    assert review["status"] in {"fail", "blocked"}
     assert any(check["id"] == "spec-envelope-dimensions" and check["status"] == "fail" for check in review["checks"])
     assert any(check["id"] == "spec-hole-diameters" and check["status"] == "fail" for check in review["checks"])
 
 
-def test_reviewer_gate_accepts_matching_cad_spec_evidence(tmp_path: Path) -> None:
+def test_reviewer_gate_rejects_unsigned_matching_cad_spec_evidence(tmp_path: Path) -> None:
     validation = tmp_path / "validation.json"
+    step = tmp_path / "model.step"
+    step.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
     validation.write_text(
         json.dumps(
             {
@@ -425,10 +489,20 @@ def test_reviewer_gate_accepts_matching_cad_spec_evidence(tmp_path: Path) -> Non
     ledger = {
         "executor": "codex",
         "objective": "创建 60 x 40 x 12 mm 校准板，中心孔直径 10 mm，四角孔直径 4 mm。",
+        "expectedOutput": "STEP",
         "strictRules": [],
         "resultMessage": "已完成校准板。",
         "verification": [{"command": "cad-check", "status": "passed", "note": "尺寸已读取"}],
         "artifacts": [
+            {
+                "kind": "step",
+                "path": str(step),
+                "exists": True,
+                "isDirectory": False,
+                "sizeBytes": step.stat().st_size,
+                "sha256": hashlib.sha256(step.read_bytes()).hexdigest(),
+                "producedThisRun": True,
+            },
             {
                 "kind": "json",
                 "path": str(validation),
@@ -443,13 +517,15 @@ def test_reviewer_gate_accepts_matching_cad_spec_evidence(tmp_path: Path) -> Non
 
     review = evaluate_ledger(ledger)
 
-    assert review["status"] == "pass"
-    assert any(check["id"] == "spec-envelope-dimensions" and check["status"] == "pass" for check in review["checks"])
-    assert any(check["id"] == "spec-hole-diameters" and check["status"] == "pass" for check in review["checks"])
+    assert review["status"] in {"fail", "blocked"}
+    assert not any(check["id"] == "spec-envelope-dimensions" and check["status"] == "pass" for check in review["checks"])
+    assert any(check["id"] == "measurement-attestation-required" for check in review["checks"])
 
 
-def test_reviewer_gate_accepts_envelope_with_different_axis_order(tmp_path: Path) -> None:
+def test_reviewer_gate_rejects_unsigned_envelope_with_different_axis_order(tmp_path: Path) -> None:
     validation = tmp_path / "validation.json"
+    step = tmp_path / "model.step"
+    step.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
     validation.write_text(
         json.dumps(
             {
@@ -464,9 +540,19 @@ def test_reviewer_gate_accepts_envelope_with_different_axis_order(tmp_path: Path
     ledger = {
         "executor": "codex",
         "objective": "创建 60 x 40 x 12 mm 零件。",
+        "expectedOutput": "STEP",
         "strictRules": [],
         "verification": [{"command": "cad-check", "status": "passed", "note": "已读取包围盒"}],
         "artifacts": [
+            {
+                "kind": "step",
+                "path": str(step),
+                "exists": True,
+                "isDirectory": False,
+                "sizeBytes": step.stat().st_size,
+                "sha256": hashlib.sha256(step.read_bytes()).hexdigest(),
+                "producedThisRun": True,
+            },
             {
                 "kind": "json",
                 "path": str(validation),
@@ -481,13 +567,15 @@ def test_reviewer_gate_accepts_envelope_with_different_axis_order(tmp_path: Path
 
     review = evaluate_ledger(ledger)
 
-    assert any(check["id"] == "spec-envelope-dimensions" and check["status"] == "pass" for check in review["checks"])
+    assert review["status"] in {"fail", "blocked"}
+    assert any(check["id"] == "measurement-attestation-required" for check in review["checks"])
 
 
 def test_reviewer_gate_fails_when_machine_readable_spec_evidence_is_missing() -> None:
     ledger = {
         "executor": "codex",
         "objective": "创建 60 x 40 x 12 mm 校准板，中心孔直径 10 mm。",
+        "expectedOutput": "STEP",
         "strictRules": [],
         "resultMessage": "已创建 60 x 40 x 12 mm 校准板，中心孔直径 10 mm。",
         "verification": [{"command": "cad-check", "status": "passed", "note": "执行器自报通过"}],
@@ -496,13 +584,15 @@ def test_reviewer_gate_fails_when_machine_readable_spec_evidence_is_missing() ->
 
     review = evaluate_ledger(ledger)
 
-    assert review["status"] == "fail"
+    assert review["status"] in {"fail", "blocked"}
     assert any(check["id"] == "spec-envelope-dimensions" and check["status"] == "fail" for check in review["checks"])
     assert any(check["id"] == "spec-hole-diameters" and check["status"] == "fail" for check in review["checks"])
 
 
 def test_reviewer_gate_rejects_untrusted_matching_numbers(tmp_path: Path) -> None:
     validation = tmp_path / "agent_claim.json"
+    step = tmp_path / "model.step"
+    step.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
     validation.write_text(
         json.dumps(
             {
@@ -517,9 +607,19 @@ def test_reviewer_gate_rejects_untrusted_matching_numbers(tmp_path: Path) -> Non
     ledger = {
         "executor": "codex",
         "objective": "创建 60 x 40 x 12 mm 校准板，中心孔直径 10 mm。",
+        "expectedOutput": "STEP",
         "strictRules": [],
         "verification": [{"command": "agent-claim", "status": "passed", "note": "仅由 Agent 声明"}],
         "artifacts": [
+            {
+                "kind": "step",
+                "path": str(step),
+                "exists": True,
+                "isDirectory": False,
+                "sizeBytes": step.stat().st_size,
+                "sha256": hashlib.sha256(step.read_bytes()).hexdigest(),
+                "producedThisRun": True,
+            },
             {
                 "kind": "json",
                 "path": str(validation),
@@ -534,7 +634,7 @@ def test_reviewer_gate_rejects_untrusted_matching_numbers(tmp_path: Path) -> Non
 
     review = evaluate_ledger(ledger)
 
-    assert review["status"] == "fail"
+    assert review["status"] in {"fail", "blocked"}
     assert any(check["id"] == "spec-envelope-dimensions" and "缺少独立" in check["message"] for check in review["checks"])
     assert any(check["id"] == "spec-hole-diameters" and "缺少独立" in check["message"] for check in review["checks"])
 
@@ -550,6 +650,8 @@ def test_reviewer_gate_rejects_stale_or_tampered_measurement_report(
 ) -> None:
     """@brief 旧报告或账本哈希不一致时，机器测量证据不得进入规格门禁。"""
     validation = tmp_path / "cad_review.json"
+    step = tmp_path / "model.step"
+    step.write_text("ISO-10303-21;\nEND-ISO-10303-21;\n", encoding="utf-8")
     validation.write_text(
         json.dumps(
             {
@@ -566,9 +668,19 @@ def test_reviewer_gate_rejects_stale_or_tampered_measurement_report(
     ledger = {
         "executor": "codex",
         "objective": "创建 60 x 40 x 12 mm 零件，中心孔直径 10 mm。",
+        "expectedOutput": "STEP",
         "strictRules": [],
         "verification": [],
         "artifacts": [
+            {
+                "kind": "step",
+                "path": str(step),
+                "exists": True,
+                "isDirectory": False,
+                "sizeBytes": step.stat().st_size,
+                "sha256": hashlib.sha256(step.read_bytes()).hexdigest(),
+                "producedThisRun": True,
+            },
             {
                 "kind": "json",
                 "path": str(validation),
@@ -583,7 +695,7 @@ def test_reviewer_gate_rejects_stale_or_tampered_measurement_report(
 
     review = evaluate_ledger(ledger)
 
-    assert review["status"] == "fail"
+    assert review["status"] in {"fail", "blocked"}
     assert any(check["id"] == "spec-envelope-dimensions" and check["status"] == "fail" for check in review["checks"])
     assert any(check["id"] == "spec-hole-diameters" and check["status"] == "fail" for check in review["checks"])
 

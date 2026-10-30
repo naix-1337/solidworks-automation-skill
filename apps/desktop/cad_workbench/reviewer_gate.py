@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from .agent_contracts import safe_job_id
-from .artifact_ledger import DELIVERY_FILE_EXTENSIONS, artifact_requires_current_run_proof
+from .artifact_ledger import (
+    DELIVERY_FILE_EXTENSIONS,
+    artifact_requires_current_run_proof,
+    sha256_file,
+)
 from .core import now_iso
+from .measurement_trust import verify_measurement_evidence
 
 KNOWN_FORMAT_EXTENSIONS = DELIVERY_FILE_EXTENSIONS
-DIMENSION_TRIPLE_PATTERN = re.compile(
-    r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)?",
-    re.IGNORECASE,
-)
-DIAMETER_PATTERN = re.compile(r"(?:直径|孔径|[Ø⌀Φφ])\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)?", re.IGNORECASE)
 
 
 def review_dir(queue_dir: Path) -> Path:
@@ -125,186 +123,56 @@ def validate_known_format(kind: str, path: Path) -> dict[str, Any] | None:
     return None
 
 
-def _close_measurement(left: float, right: float, tolerance: float = 1e-6) -> bool:
-    """@brief 比较机械规格数值，当前任务统一按 mm 记录。"""
-    return abs(left - right) <= tolerance
-
-
-def _same_envelope(left: tuple[float, float, float], right: tuple[float, float, float]) -> bool:
-    """@brief 忽略模型坐标轴方向比较外形包围盒尺寸。"""
-    return all(
-        _close_measurement(left_value, right_value)
-        for left_value, right_value in zip(sorted(left), sorted(right))
-    )
-
-
-def _unique_triplets(values: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
-    """@brief 去除任务描述中重复出现的三元尺寸。"""
-    unique: list[tuple[float, float, float]] = []
-    for value in values:
-        if not any(_same_envelope(value, existing) for existing in unique):
-            unique.append(value)
-    return unique
-
-
-def _dimension_triplets(text: str) -> list[tuple[float, float, float]]:
-    """@brief 从自然语言中提取 L x W x H/厚度三元尺寸。"""
-    return [tuple(float(value) for value in match) for match in DIMENSION_TRIPLE_PATTERN.findall(text)]
-
-
-def _diameters(text: str) -> list[float]:
-    """@brief 从自然语言中提取明确标注的孔径。"""
-    return [float(value) for value in DIAMETER_PATTERN.findall(text)]
-
-
-def _json_measurements(value: Any) -> tuple[list[tuple[float, float, float]], list[float]]:
-    """@brief 递归读取验收 JSON 中的外形三元尺寸和孔径证据。"""
-    triplets: list[tuple[float, float, float]] = []
-    diameters: list[float] = []
-
-    def visit(item: Any, path: tuple[str, ...] = ()) -> None:
-        if isinstance(item, dict):
-            normalized = {str(key).lower().replace("-", "_").replace(" ", "_"): child for key, child in item.items()}
-            length = normalized.get("length", normalized.get("length_mm"))
-            width = normalized.get("width", normalized.get("width_mm"))
-            thickness = normalized.get(
-                "thickness",
-                normalized.get("thickness_mm", normalized.get("height", normalized.get("height_mm"))),
-            )
-            if not all(isinstance(number, (int, float)) and not isinstance(number, bool) for number in (length, width, thickness)):
-                length = normalized.get("size_x", normalized.get("size_x_mm", length))
-                width = normalized.get("size_y", normalized.get("size_y_mm", width))
-                thickness = normalized.get("size_z", normalized.get("size_z_mm", thickness))
-            if all(isinstance(number, (int, float)) and not isinstance(number, bool) for number in (length, width, thickness)):
-                triplets.append((float(length), float(width), float(thickness)))
-            for key, child in normalized.items():
-                is_hole_evidence = (
-                    key.startswith("hole_")
-                    or any(segment in {"hole", "holes", "孔", "孔洞"} for segment in path)
-                    or normalized.get("internal") is True
-                )
-                if (
-                    key in {"diameter", "diameter_mm", "hole_diameter", "hole_diameter_mm"}
-                    and is_hole_evidence
-                    and isinstance(child, (int, float))
-                    and not isinstance(child, bool)
-                ):
-                    diameters.append(float(child))
-                visit(child, (*path, key))
-        elif isinstance(item, list):
-            for child in item:
-                visit(child, path)
-
-    visit(value)
-    return triplets, diameters
-
-
-def _trusted_measurement_payload(value: Any) -> dict[str, Any] | None:
-    """@brief 只接受声明为 CAD/B-Rep API 回读的结构化规格报告。"""
-    if not isinstance(value, dict):
-        return None
-    cad_spec = value.get("cad_spec")
-    if not isinstance(cad_spec, dict):
-        return None
-    source = str(cad_spec.get("measurement_source") or value.get("measurement_source") or "")
-    trusted_prefixes = ("SolidWorks API ", "AutoCAD ActiveX ", "OpenCascade B-Rep ")
-    return cad_spec if source.startswith(trusted_prefixes) else None
-
-
-def _artifact_measurements(artifacts: list[dict[str, Any]]) -> tuple[list[tuple[float, float, float]], list[float]]:
-    """@brief 从本轮 JSON 交付物读取独立于 Codex 摘要的规格证据。"""
-    triplets: list[tuple[float, float, float]] = []
-    diameters: list[float] = []
-    for artifact in artifacts:
-        path = Path(str(artifact.get("path") or ""))
-        if (
-            artifact.get("exists") is not True
-            or artifact.get("isDirectory") is True
-            or artifact.get("producedThisRun") is not True
-            or path.suffix.lower() != ".json"
-            or int(artifact.get("sizeBytes") or 0) > 1024 * 1024
-        ):
-            continue
-        try:
-            raw = path.read_bytes()
-            expected_sha256 = str(artifact.get("sha256") or "")
-            if not expected_sha256 or hashlib.sha256(raw).hexdigest() != expected_sha256:
-                continue
-            value = json.loads(raw.decode("utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        payload = _trusted_measurement_payload(value)
-        if payload is None:
-            continue
-        found_triplets, found_diameters = _json_measurements(payload)
-        triplets.extend(found_triplets)
-        diameters.extend(found_diameters)
-    return triplets, diameters
-
-
-def _spec_conformance_checks(ledger: dict[str, Any], artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """@brief 对比任务明确尺寸与验收 JSON 的实际规格，阻止错模型进入人工放行。"""
-    strict_rules = ledger.get("strictRules") if isinstance(ledger.get("strictRules"), list) else []
-    requirement_text = "\n".join(
-        [
-            str(ledger.get("objective") or ""),
-            str(ledger.get("detail") or ""),
-            *(str(item) for item in strict_rules),
-        ]
-    )
-    expected_triplets = _dimension_triplets(requirement_text)
-    expected_diameters = _diameters(requirement_text)
-    evidence_triplets, evidence_diameters = _artifact_measurements(artifacts)
-    expected_triplets = _unique_triplets(expected_triplets)
-    checks: list[dict[str, Any]] = []
-
-    if expected_triplets:
-        missing_envelopes = [
-            expected
-            for expected in expected_triplets
-            if not any(_same_envelope(expected, actual) for actual in evidence_triplets)
-        ]
-        checks.append(
-            {
-                "id": "spec-envelope-dimensions",
-                "severity": "P0",
-                "status": "pass" if evidence_triplets and not missing_envelopes else "fail",
-                "message": (
-                    f"外形尺寸证据与任务一致: {expected_triplets} mm。"
-                    if evidence_triplets and not missing_envelopes
-                    else "缺少独立的机器可读外形尺寸证据。"
-                    if not evidence_triplets
-                    else f"外形尺寸与任务不一致；缺少 {missing_envelopes} mm，验收证据报告 {evidence_triplets} mm。"
-                ),
-            }
+def _spec_conformance_checks(
+    ledger: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+    *,
+    trust_root: Mapping[str, Any] | None,
+    online_status: Callable[[str], Mapping[str, Any] | None] | None,
+    measurement_verifier: Callable[..., dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """@brief 只消费锁定规格、受信 B-Rep 测量和在线 Ed25519 证明。"""
+    verifier = measurement_verifier or verify_measurement_evidence
+    try:
+        result = verifier(
+            ledger,
+            artifacts,
+            trust_root=trust_root,
+            online_status=online_status,
         )
-
-    if expected_diameters:
-        unique_expected = sorted(set(expected_diameters))
-        unique_actual = sorted(set(evidence_diameters))
-        missing = [
-            expected
-            for expected in unique_expected
-            if not any(_close_measurement(expected, actual) for actual in unique_actual)
+    except Exception as exc:  # noqa: BLE001 - 信任链异常必须安全阻断
+        return [
+            {
+                "id": "measurement-trust-verifier",
+                "severity": "P0",
+                "status": "blocked",
+                "message": f"测量信任链验证异常: {type(exc).__name__}: {exc}",
+            }
         ]
+    if result.get("status") == "not_applicable":
+        return []
+    checks: list[dict[str, Any]] = []
+    for check in result.get("checks", []):
+        if not isinstance(check, dict):
+            continue
+        status = "warning" if check.get("status") == "review_required" else check.get("status", "blocked")
         checks.append(
             {
-                "id": "spec-hole-diameters",
-                "severity": "P0",
-                "status": "pass" if evidence_diameters and not missing else "fail",
-                "message": (
-                    f"孔径证据与任务一致: {unique_expected} mm。"
-                    if evidence_diameters and not missing
-                    else "任务包含明确孔径，但交付物缺少独立的机器可读孔径证据。"
-                    if not evidence_diameters
-                    else f"孔径与任务不一致；缺少要求孔径 {missing} mm，验收证据报告 {unique_actual} mm。"
-                ),
+                **dict(check),
+                "status": status,
+                "severity": "P0" if status in {"fail", "blocked"} else "P1",
             }
         )
     return checks
 
 
-def evaluate_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
+def evaluate_ledger(
+    ledger: dict[str, Any],
+    *,
+    trust_root: Mapping[str, Any] | None = None,
+    online_status: Callable[[str], Mapping[str, Any] | None] | None = None,
+    measurement_verifier: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """@brief 根据账本内容生成交付物复核结论。"""
     artifacts = ledger.get("artifacts") if isinstance(ledger.get("artifacts"), list) else []
     checks: list[dict[str, Any]] = []
@@ -313,7 +181,15 @@ def evaluate_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
         for artifact in artifacts
         if isinstance(artifact, dict) and str(artifact.get("kind") or "") != "codex_output"
     ]
-    checks.extend(_spec_conformance_checks(ledger, delivery_artifacts))
+    checks.extend(
+        _spec_conformance_checks(
+            ledger,
+            delivery_artifacts,
+            trust_root=trust_root,
+            online_status=online_status,
+            measurement_verifier=measurement_verifier,
+        )
+    )
 
     executor = str(ledger.get("executor") or "mock")
     production_executor = executor != "mock"
@@ -322,22 +198,24 @@ def evaluate_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
         checks.append(
             {
                 "id": "executor-verification-present",
-                "severity": "P1",
-                "status": "warning",
-                "message": "执行器未返回验证记录，不能确认生成步骤已经完成针对性检查。",
+                "severity": "P2",
+                "status": "pass",
+                "message": "执行器未返回验证记录；Agent 自报验证仅作说明，不参与最终判定。",
             }
         )
     for index, item in enumerate(verification):
         if not isinstance(item, dict):
             continue
         status = str(item.get("status") or "skipped")
-        review_status = "pass" if status == "passed" else "warning" if status == "skipped" else "fail"
         checks.append(
             {
                 "id": f"executor-verification-{index}",
-                "severity": "P0" if review_status == "fail" else "P1",
-                "status": review_status,
-                "message": f"执行验证 {status}: {item.get('command') or '未命名检查'}；{item.get('note') or ''}",
+                "severity": "P2",
+                "status": "pass",
+                "message": (
+                    f"Agent 自报验证 {status}（仅展示，不参与最终门禁）: "
+                    f"{item.get('command') or '未命名检查'}；{item.get('note') or ''}"
+                ),
             }
         )
 
@@ -352,7 +230,14 @@ def evaluate_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
-    expected_output = str(ledger.get("expectedOutput") or "")
+    required_outputs = ledger.get("requiredOutputs")
+    required_output_values = required_outputs if isinstance(required_outputs, list) else []
+    expected_output = " ".join(
+        [
+            str(ledger.get("expectedOutput") or ""),
+            *(str(item) for item in required_output_values),
+        ]
+    )
     expected_output_upper = expected_output.upper()
     expected_groups: list[tuple[str, set[str]]] = []
     format_groups = [
@@ -534,6 +419,30 @@ def evaluate_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         else:
+            path = Path(str(artifact.get("path") or ""))
+            try:
+                actual_size = path.stat().st_size
+                actual_sha256 = sha256_file(path)
+            except OSError as exc:
+                checks.append(
+                    {
+                        "id": f"artifact-content-{kind}",
+                        "severity": "P0",
+                        "status": "fail",
+                        "message": f"交付物无法重新读取: {path}: {exc}",
+                    }
+                )
+                continue
+            if actual_size != size_bytes or actual_sha256 != artifact.get("sha256"):
+                checks.append(
+                    {
+                        "id": f"artifact-content-{kind}",
+                        "severity": "P0",
+                        "status": "fail",
+                        "message": f"交付物在账本记录后发生变化: {path}",
+                    }
+                )
+                continue
             checks.append(
                 {
                     "id": f"artifact-file-{kind}",
@@ -547,7 +456,15 @@ def evaluate_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
                 checks.append(format_check)
 
     statuses = {check["status"] for check in checks}
-    overall = "fail" if "fail" in statuses else "warning" if "warning" in statuses else "pass"
+    overall = (
+        "blocked"
+        if "blocked" in statuses
+        else "fail"
+        if "fail" in statuses
+        else "warning"
+        if "warning" in statuses
+        else "pass"
+    )
     return {
         "schemaVersion": "1.0",
         "jobId": ledger.get("jobId"),
@@ -559,9 +476,21 @@ def evaluate_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_reviewer_gate(queue_dir: Path, ledger: dict[str, Any]) -> dict[str, Any]:
+def write_reviewer_gate(
+    queue_dir: Path,
+    ledger: dict[str, Any],
+    *,
+    trust_root: Mapping[str, Any] | None = None,
+    online_status: Callable[[str], Mapping[str, Any] | None] | None = None,
+    measurement_verifier: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """@brief 写入 Reviewer Gate 报告并返回报告对象。"""
-    review = evaluate_ledger(ledger)
+    review = evaluate_ledger(
+        ledger,
+        trust_root=trust_root,
+        online_status=online_status,
+        measurement_verifier=measurement_verifier,
+    )
     path = review_path_for(queue_dir, ledger.get("jobId"))
     path.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
     review["reviewPath"] = str(path)

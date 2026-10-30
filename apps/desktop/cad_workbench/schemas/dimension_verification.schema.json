@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cad-studio.local/schemas/dimension_verification.schema.json",
+  "title": "CAD Dimension Verification Specification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "units", "source", "artifacts", "checks"],
+  "anyOf": [
+    {
+      "properties": {
+        "checks": {
+          "properties": {
+            "envelope": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "checks": {
+          "properties": {
+            "holes": {
+              "minItems": 1
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "cad-dimension-verification/v1"
+    },
+    "units": {
+      "const": "mm"
+    },
+    "source": {
+      "enum": ["deterministic_parser", "user_confirmed"]
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredKinds", "measurementKinds"],
+      "properties": {
+        "requiredKinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["step", "stp", "iges", "igs", "brep"]
+          }
+        },
+        "measurementKinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["step", "stp", "iges", "igs", "brep"]
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["envelope", "holes"],
+      "properties": {
+        "envelope": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["expectedUm", "toleranceUm"],
+              "properties": {
+                "expectedUm": {
+                  "type": "array",
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "toleranceUm": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "holes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["diameterUm", "count", "toleranceUm"],
+            "properties": {
+              "diameterUm": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "count": {
+                "type": ["integer", "null"],
+                "minimum": 1
+              },
+              "toleranceUm": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

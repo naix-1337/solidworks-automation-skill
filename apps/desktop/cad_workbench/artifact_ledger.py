@@ -204,6 +204,14 @@ def build_artifact_ledger(queue_dir: Path, job: dict[str, Any], result: dict[str
         "detail": job.get("detail"),
         "strictRules": job.get("strictRules") if isinstance(job.get("strictRules"), list) else [],
         "expectedOutput": job.get("expectedOutput"),
+        "requiredOutputs": job.get("requiredOutputs")
+        if isinstance(job.get("requiredOutputs"), list)
+        else [],
+        "verificationSpec": job.get("verificationSpec"),
+        "verificationSession": job.get("verificationSession"),
+        "measurementAttestation": result.get("measurementAttestation"),
+        "measurementAttestationPath": result.get("measurementAttestationPath"),
+        "measurementTrustError": result.get("measurementTrustError"),
         "localCadAutomation": bool(
             job.get("uiConfig", {}).get("cadRuntime", {}).get("localCadAutomation")
             if isinstance(job.get("uiConfig"), dict)

@@ -82,6 +82,8 @@ jobs:
         run: npm ci
       - name: Test package startup diagnostics
         run: node --test tests/test_release_portable_wait.cjs
+      - name: Verify measurement attestation signing vector
+        run: node --test tests/test_measurement_trust_signing.cjs
       # @brief 安装器安全边界（拒绝覆盖用户目录、不凭空创建、非 Windows 拒绝）必须随测试守住。
       - name: Test skill installer safety
         run: node --test tests/test_install_safety.cjs

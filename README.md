@@ -157,6 +157,19 @@ LLM 会规划，但常见的 AI CAD 自动化有几个真实问题：
 | 执行不可追踪 | 结构化 Trace |
 | 是否可靠 | Golden Workflow Eval |
 
+### Signed Dimension Evidence
+
+尺寸门禁不再信任 Agent 自己写入的 `cad_spec`、`measurement_source` 或
+`verification.status`。生产 `PASS` 由受保护 Runner 独立重开 STEP/IGES/BREP，
+生成整数微米 B-Rep 测量，并以 Agent 权限外、与在线状态签名分离的 Ed25519
+测量密钥签发证明；本机再在线验证双签名、产物 SHA-256、session/run/nonce 和
+验证器版本。
+
+离线、签名无效、密钥撤销、产物在证明后变化或验证器不在批准版本内时一律不能
+通过。首版只覆盖开放 B-Rep；原生 SolidWorks 文件仍保持人工复核。协议、部署前提
+与信任边界见
+[`docs/architecture/measurement-evidence-trust-chain.md`](docs/architecture/measurement-evidence-trust-chain.md)。
+
 ---
 
 ## Architecture
@@ -214,7 +227,7 @@ Artifacts + Evidence
 
 | 层 | 在哪里跑 | 覆盖什么 | 不覆盖什么 |
 |---|---|---|---|
-| L1 离线回归 | 任意机器 | `pytest`（全量，当前 1045 项）、`evals/runner.py`（12 workflow / 43 scenario）、治理单测（当前 93 项） | 需要 SolidWorks / AutoCAD 进程的一切 |
+| L1 离线回归 | 任意机器 | `pytest`（全量，当前 1228 项）、`evals/runner.py`（12 workflow / 43 scenario）、治理单测（当前 93 项） | 需要 SolidWorks / AutoCAD 进程的一切 |
 | L2 托管 CI | GitHub 托管 `windows-2022` | 与 L1 相同，外加前端/ Rust 构建与发布契约检查；作业名 `test-and-build`，是 `main` 的**唯一必需状态检查** | 真实 CAD 执行 |
 | L3 真实 CAD 验收 | **仅维护者本机**（Windows 11 + SolidWorks 2026 SP01.1） | Golden 五轮真机、装配/工程图/运动算例等真机回归 | 其它机器、其它版本 |
 

@@ -1,0 +1,6 @@
+cadquery-ocp==7.9.3.1.1
+cadquery-ocp-proxy==7.9.3.1.1
+cryptography==46.0.3
+httpx==0.28.1
+jsonschema==4.25.1
+vtk==9.6.2

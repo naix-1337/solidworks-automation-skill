@@ -1,0 +1,218 @@
+openapi: 3.1.0
+info:
+  title: CAD Measurement Evidence Control Plane
+  version: 1.0.0
+  description: >
+    Private control-plane contract for one-time CAD evidence sessions.
+    This service never signs measurements; the protected self-hosted Runner
+    owns the Ed25519 signer.
+servers:
+  - url: https://cad-evidence.example.invalid
+    description: Replace with the protected on-prem or private-cloud endpoint.
+paths:
+  /v1/verification-sessions:
+    post:
+      summary: Create a locked measurement-verification session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionRequest"
+      responses:
+        "201":
+          description: One-time upload capability created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionCreated"
+  /v1/verification-sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: Read the control-plane locked session for the protected Runner
+      responses:
+        "200":
+          description: Locked session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockedSession"
+  /v1/verification-sessions/{sessionId}/finalize:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      summary: Mark the one-time bundle complete and dispatch the protected Runner
+      responses:
+        "202":
+          description: Verification queued
+  /v1/verification-sessions/{sessionId}/bundle:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: Download the immutable one-time evidence bundle
+      responses:
+        "200":
+          description: ZIP evidence bundle
+          content:
+            application/zip:
+              schema:
+                type: string
+                contentMediaType: application/zip
+  /v1/verification-sessions/{sessionId}/attestation:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: Poll the signed Runner attestation
+      responses:
+        "200":
+          description: Signed measurement attestation
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Verification is still running
+    put:
+      summary: Upload the signed attestation from the protected Runner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "204":
+          description: Attestation stored
+  /v1/attestations/{attestationId}/status:
+    parameters:
+      - name: attestationId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Return a short-lived signed revocation and verifier-policy status
+      responses:
+        "200":
+          description: Signed online status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttestationStatus"
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  schemas:
+    SessionRequest:
+      type: object
+      additionalProperties: false
+      required: [schema, jobId, runId, objective, spec, specSha256]
+      properties:
+        schema:
+          const: cad-evidence-session-request/v1
+        jobId:
+          type: string
+        runId:
+          type: string
+        objective:
+          type: string
+        spec:
+          type: object
+        specSha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    SessionCreated:
+      type: object
+      additionalProperties: false
+      required: [sessionId, nonce, uploadUrl, expiresAt]
+      properties:
+        sessionId:
+          type: string
+        nonce:
+          type: string
+          minLength: 32
+        uploadUrl:
+          type: string
+          format: uri
+        expiresAt:
+          type: string
+          format: date-time
+    LockedSession:
+      allOf:
+        - $ref: "#/components/schemas/SessionRequest"
+        - type: object
+          required: [sessionId, nonce]
+          properties:
+            sessionId:
+              type: string
+            nonce:
+              type: string
+    AttestationStatus:
+      type: object
+      required:
+        - schema
+        - attestationId
+        - status
+        - verifierPolicy
+        - checkedAt
+        - expiresAt
+        - signer
+        - signature
+      properties:
+        schema:
+          const: cad-attestation-status/v1
+        attestationId:
+          type: string
+        status:
+          enum: [active, revoked, blocked]
+        verifierPolicy:
+          type: object
+          required:
+            - workflowRepository
+            - workflowRef
+            - workflowSha
+            - toolkitSha256
+            - pythonVersion
+            - platform
+            - dependencyLockSha256
+            - dependencyVersionsSha256
+          properties:
+            workflowRepository:
+              type: string
+            workflowRef:
+              type: string
+            workflowSha:
+              type: string
+            toolkitSha256:
+              type: string
+            pythonVersion:
+              type: string
+            platform:
+              type: string
+            dependencyLockSha256:
+              type: string
+            dependencyVersionsSha256:
+              type: string
+        checkedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        signer:
+          type: object
+        signature:
+          type: string
+security:
+  - bearer: []

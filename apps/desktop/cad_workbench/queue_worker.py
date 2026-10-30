@@ -29,10 +29,16 @@ from .agent_contracts import (
     compile_codex_prompt,
     policy_reasons,
     require_policy_approval,
+    safe_job_id,
     validate_codex_job,
 )
 from .agent_providers import AgentProvider, build_provider_command, parse_provider_result, resolve_provider
-from .artifact_ledger import DELIVERY_FILE_EXTENSIONS, sha256_file, write_artifact_ledger
+from .artifact_ledger import (
+    DELIVERY_FILE_EXTENSIONS,
+    build_artifact_ledger,
+    sha256_file,
+    write_artifact_ledger,
+)
 from .core import CN_TZ, now_iso
 from .engineering_orchestrator import (
     build_engineering_plan,
@@ -41,6 +47,12 @@ from .engineering_orchestrator import (
     requires_engineering_orchestration,
 )
 from .knowledge_retrieval import build_job_knowledge_context
+from .measurement_remote import (
+    MeasurementRuntime,
+    MeasurementTransportError,
+    complete_measurement_session,
+    prepare_measurement_session,
+)
 from .reviewer_gate import write_reviewer_gate
 from .worker_health import QUEUE_METADATA_FILES, write_worker_health
 
@@ -1079,6 +1091,15 @@ def _run_command(command: Sequence[str], cwd: Path, timeout_seconds: int) -> sub
     )
 
 
+def _agent_child_environment() -> dict[str, str]:
+    """@brief Agent 子进程不得继承证明控制面 URL、令牌或私钥配置。"""
+    child_env = os.environ.copy()
+    for name in list(child_env):
+        if name.startswith("CAD_EVIDENCE_"):
+            child_env.pop(name, None)
+    return child_env
+
+
 def _run_command_with_runtime(
     command: Sequence[str],
     cwd: Path,
@@ -1100,7 +1121,7 @@ def _run_command_with_runtime(
     append_event(job_path.parent, job, f"{event_prefix}.started", f"{process_label} 进程已启动", {"cwd": str(cwd), "stdout": str(stdout_path), "stderr": str(stderr_path)})
     ui_config = job.get("uiConfig") if isinstance(job.get("uiConfig"), dict) else {}
     knowledge = ui_config.get("knowledgeBase") if isinstance(ui_config.get("knowledgeBase"), dict) else {}
-    child_env = os.environ.copy()
+    child_env = _agent_child_environment()
     if knowledge.get("officialApiDocsEnabled", True) is not True:
         child_env["SW_API_LOOKUP_NETWORK"] = "off"
     if knowledge.get("parallelApiFallbackEnabled", True) is not True:
@@ -1226,7 +1247,9 @@ def _record_verification_assessment(path: Path, job: dict[str, Any], review: dic
     job["verificationAssessment"] = verification.to_dict()
     if verification.status.value == "FAIL":
         review["status"] = "fail"
-    elif verification.status.value in {"WARN", "BLOCKED"} or verification.manual_review_required:
+    elif verification.status.value == "BLOCKED":
+        review["status"] = "blocked"
+    elif verification.status.value == "WARN" or verification.manual_review_required:
         review["status"] = "warning"
     decision = decide(
         verification_result=verification.to_dict(),
@@ -1243,6 +1266,7 @@ def process_job(
     handlers: Mapping[str, JobHandler] | None = None,
     runner_id: str | None = None,
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    measurement_runtime: MeasurementRuntime | None = None,
 ) -> dict[str, Any] | None:
     """@brief 执行一个 queued 任务，终态任务会被跳过。"""
     path = Path(path)
@@ -1280,6 +1304,46 @@ def process_job(
         if kind not in active_handlers:
             raise ValueError(f"任务类型未配置 handler: {kind}")
 
+        runtime_error: str | None = None
+        if measurement_runtime is not None:
+            runtime = measurement_runtime
+        else:
+            try:
+                runtime = MeasurementRuntime.from_process_environment()
+            except (MeasurementTransportError, OSError, ValueError) as exc:
+                runtime = None
+                runtime_error = f"测量信任配置无效: {exc}"
+        measurement_preflight = prepare_measurement_session(
+            job,
+            runtime.client if runtime is not None else None,
+        )
+        measurement_session_secret: Mapping[str, Any] | None = None
+        if runtime_error and measurement_preflight.get("status") == "blocked":
+            measurement_preflight["reason"] = runtime_error
+            measurement_preflight["code"] = "control_plane_invalid"
+        if measurement_preflight.get("status") == "blocked":
+            message = str(measurement_preflight.get("reason") or "尺寸证据控制面不可用")
+            job["blockedReasons"] = [message]
+            job["measurementTrustPreflight"] = measurement_preflight
+            set_job_state(job, "blocked", 0, message)
+            append_event(path.parent, job, "run.blocked", message, measurement_preflight)
+            write_job(path, job)
+            return job
+        if measurement_preflight.get("status") == "review_required":
+            job["measurementTrustPreflight"] = measurement_preflight
+        elif measurement_preflight.get("status") == "passed":
+            raw_session = measurement_preflight.get("session")
+            if isinstance(raw_session, dict):
+                measurement_session_secret = raw_session
+                job["measurementTrustPreflight"] = {
+                    "status": "passed",
+                    "session": {
+                        key: value
+                        for key, value in raw_session.items()
+                        if key != "uploadUrl"
+                    },
+                }
+
         mark_job_claimed(job, runner_id or worker_id(), lease_seconds)
         set_job_state(job, "running", 12, "worker 已接单，正在准备本地 CAD 执行环境。")
         write_job(path, job)
@@ -1297,11 +1361,46 @@ def process_job(
             for evidence_key in ("drawingEvidence", "bomEvidence", "dfmEvidence", "reviewFindings", "artifactRelations"):
                 if evidence_key in result:
                     job[evidence_key] = result[evidence_key]
+        preliminary_ledger = build_artifact_ledger(path.parent, job, result)
+        job_base = Path(str(job.get("cwd") or job.get("projectPath") or path.parent))
+        completion = complete_measurement_session(
+            job=job,
+            ledger=preliminary_ledger,
+            allowed_roots=_artifact_roots(job, job_base),
+            client=runtime.client if runtime is not None else None,
+            evidence_dir=path.parent / "evidence" / safe_job_id(job.get("id")),
+            session=measurement_session_secret,
+        )
+        if completion.get("status") == "submitted":
+            result["measurementAttestation"] = completion["attestation"]
+            result["measurementAttestationPath"] = completion["attestationPath"]
+            result["measurementBundlePath"] = completion["bundlePath"]
+            result["measurementBundleSha256"] = completion["bundleSha256"]
+            attestation_artifact = {
+                "kind": "measurement_attestation",
+                "path": completion["attestationPath"],
+            }
+            for key in ("outputs", "artifacts"):
+                artifact_list = result.get(key)
+                if not isinstance(artifact_list, list):
+                    artifact_list = []
+                    result[key] = artifact_list
+                artifact_list.append(dict(attestation_artifact))
+            job["measurementAttestation"] = completion["attestation"]
+            job["measurementAttestationPath"] = completion["attestationPath"]
+        elif completion.get("status") == "blocked":
+            result["measurementTrustError"] = completion.get("reason")
+            job["measurementTrustError"] = completion.get("reason")
         ledger = write_artifact_ledger(path.parent, job, result)
         job["artifactLedgerPath"] = ledger["ledgerPath"]
         job["artifacts"] = ledger["artifacts"]
         append_event(path.parent, job, "artifact.ledger_written", "交付物账本已写入", {"ledgerPath": ledger["ledgerPath"]})
-        review = write_reviewer_gate(path.parent, ledger)
+        review = write_reviewer_gate(
+            path.parent,
+            ledger,
+            trust_root=runtime.trust_root if runtime is not None else None,
+            online_status=runtime.online_status if runtime is not None else None,
+        )
         if is_cancel_requested(path):
             raise JobCancelled("任务已请求取消")
         job["reviewGate"] = review
@@ -1313,6 +1412,12 @@ def process_job(
             job["error"] = message
             set_job_state(job, "failed", 100, message)
             append_event(path.parent, job, "run.failed", message)
+        elif review["status"] == "blocked":
+            message = "交付物无法完成受信验证，任务已安全阻断。"
+            job["blockedReasons"] = [message]
+            job["stage"] = "blocked"
+            set_job_state(job, "blocked", 100, message)
+            append_event(path.parent, job, "run.blocked", message)
         else:
             message = str(result.get("message", "任务完成"))
             if review["status"] == "warning":
