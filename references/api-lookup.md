@@ -41,6 +41,8 @@ CAD Studio、CLI 的 `--task` 和 MCP 的 `task` 参数对自然语言中的画�
 
 ## 必查 API 类型
 
+查证时同时确认成员所属对象以及属性/方法形式。新接口的最小验证、伪可调用成员、尺寸对话框恢复和确定性失败的处理见 [建模防错流程](modeling-reliability.md)。声明存在不等于目标版本实际调用已验证；未通过最小验证前不要接入完整建模。
+
 - `IModelDocExtension.SaveAs*`、`OpenDoc*`、`CloseDoc`、导出相关 API
 - `SelectByID2`、选择标记、选择类型字符串与选择追加逻辑
 - `FeatureManager.FeatureExtrusion*`、`FeatureCut*`、扫描、放样、圆角、倒角等长参数方法

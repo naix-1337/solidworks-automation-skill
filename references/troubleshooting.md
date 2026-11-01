@@ -20,8 +20,8 @@ sw = win32com.client.Dispatch("SldWorks.Application.32")  # SW 2024
 错误: pywintypes.com_error: (-2147221021, '操作不可用', None, None)
 ```
 
-**原因**: SolidWorks 未运行
-**解决**: 先手动启动 SolidWorks，或使用 `Dispatch` 启动新实例
+**可能原因**: SolidWorks 未运行、实例尚未就绪，或已有实例与当前 Python 处于不同权限/桌面会话，导致 ROT 不可见。
+**处理顺序**: 先检查已有进程及目标版本，再通过 `SolidWorksSession` 的受控连接器附着。存在适用进程时，诊断权限、会话及就绪状态，不反复 `Dispatch`。只有确认无适用实例且允许启动时才创建新实例；不要仅凭本错误断言未安装或未运行。详细步骤见 [建模防错流程](modeling-reliability.md)。
 
 ### Python 32/64 位不匹配
 
@@ -41,6 +41,8 @@ sw = win32com.client.Dispatch("SldWorks.Application.32")  # SW 2024
 原因：SolidWorks 某些 COM 成员在动态派发下既可能表现为属性，也可能表现为方法；`callable(member)` 不能作为唯一判断。
 
 稳定写法：优先使用 `sw_connect.get_com_member()` 或 `sw_assembly.safe_get_com_member()`。
+
+`SelectionManager.CreateSelectData` 也可能表现为伪可调用属性，应使用 `get_com_member(manager, "CreateSelectData")`。先确认成员所属接口；草图的 `GetConstrainedStatus` 不能直接用于草图点。带副作用方法失败时，不通过泛化捕获异常反复尝试不同调用形式。
 
 ```python
 from sw_connect import get_com_member

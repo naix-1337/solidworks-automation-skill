@@ -30,11 +30,13 @@ def inspect_sketch(sketch):
     return record
 
 
-def fully_define_sketch(model):
+def fully_define_sketch(model, *, relations_to_apply=1023):
     """@brief 以原点为尺寸基准补全草图，禁止用 Fix 代替设计参数。
     @param model 处于草图编辑态的 IModelDoc2。
     @return 实际回读证据；无法取得明确通过证据时抛出异常。
     """
+    if isinstance(relations_to_apply, bool) or not isinstance(relations_to_apply, int) or not 0 <= relations_to_apply <= 1023:
+        raise ValueError("relations_to_apply 必须是 0 至 1023 的已核对关系位掩码")
     active = get_com_member(model.SketchManager, "ActiveSketch")
     if active is None:
         raise ValueError("完全定义必须在草图编辑态执行")
@@ -59,8 +61,9 @@ def fully_define_sketch(model):
                 break
         if not selected:
             raise RuntimeError("无法选择原点作为水平/垂直尺寸基准")
-        # 1023 是已核对的十种关系组合，不包含固定关系。返回码未定义，必须回读。
-        returned = model.SketchManager.FullyDefineSketch(True, True, 1023, True,
+        # 默认保留既有基础草图行为；复杂草图通过 guard 显式限制关系并比较求解前后几何。
+        # 0 表示仅补尺寸，不添加关系。任何返回码仍须与实际约束状态交叉检查。
+        returned = model.SketchManager.FullyDefineSketch(True, bool(relations_to_apply), relations_to_apply, True,
             1, create_empty_dispatch_variant(), 1, create_empty_dispatch_variant(), 1, 1)
         record = inspect_sketch(active)
         record["api_return"] = returned
